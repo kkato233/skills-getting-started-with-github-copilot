@@ -57,7 +57,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   { method: "DELETE" }
                 );
 
-                if (!response.ok) {
+                if (!response.ok && response.status !== 404) {
                   throw new Error("Failed to unregister participant");
                 }
 
