@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, BrokenBarrierError
 
 from fastapi.testclient import TestClient
 
@@ -14,8 +14,6 @@ class RacingParticipants(list):
     def remove(self, email):
         self.barrier.wait()
         return super().remove(email)
-
-
 def test_root_redirects_to_static_index(client):
     response = client.get("/", follow_redirects=False)
 
@@ -55,6 +53,37 @@ def test_signup_rejects_duplicate_participant(client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Student already signed up for this activity"
+
+
+def test_signup_rejects_concurrent_duplicate_participant():
+    email = "concurrent.student@mergington.edu"
+    barrier = Barrier(2)
+
+    class CoordinatedParticipants(list):
+        def __contains__(self, item):
+            result = super().__contains__(item)
+            try:
+                barrier.wait(timeout=1)
+            except BrokenBarrierError:
+                pass
+            return result
+
+    activity = app_module.activities["Chess Club"]
+    activity["participants"] = CoordinatedParticipants(activity["participants"])
+
+    def signup():
+        with TestClient(app_module.app) as test_client:
+            return test_client.post(
+                "/activities/Chess Club/signup",
+                params={"email": email},
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: signup(), range(2)))
+
+    status_codes = sorted(response.status_code for response in responses)
+    assert status_codes == [200, 400]
+    assert activity["participants"].count(email) == 1
 
 
 def test_signup_rejects_unknown_activity(client):
