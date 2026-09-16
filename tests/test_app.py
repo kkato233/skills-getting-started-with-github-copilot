@@ -1,3 +1,21 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from fastapi.testclient import TestClient
+
+from src import app as app_module
+
+
+class RacingParticipants(list):
+    def __init__(self, participants, barrier):
+        super().__init__(participants)
+        self.barrier = barrier
+
+    def remove(self, email):
+        self.barrier.wait()
+        return super().remove(email)
+
+
 def test_root_redirects_to_static_index(client):
     response = client.get("/", follow_redirects=False)
 
@@ -66,6 +84,24 @@ def test_unregister_rejects_unknown_participant(client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Participant not found"
+
+
+def test_unregister_handles_concurrent_requests_without_server_error():
+    email = "race.student@mergington.edu"
+    app_module.activities["Chess Club"]["participants"] = RacingParticipants(
+        [email],
+        Barrier(2),
+    )
+
+    def unregister():
+        with TestClient(app_module.app, raise_server_exceptions=False) as test_client:
+            return test_client.delete(f"/activities/Chess Club/participants/{email}")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = [future.result() for future in [executor.submit(unregister) for _ in range(2)]]
+
+    assert sorted(response.status_code for response in responses) == [200, 404]
+    assert app_module.activities["Chess Club"]["participants"] == []
 
 
 def test_unregister_rejects_unknown_activity(client):
